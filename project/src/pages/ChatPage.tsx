@@ -1,16 +1,39 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, User, Loader2, Plus, MessageSquare, Sparkles } from 'lucide-react';
-import { Message, ChatSession } from '../types';
-import { useAuth } from '../hooks/useAuth';
+import { Send, Bot, User, Loader2, Plus, MessageSquare, Sparkles, Mic, MicOff, Upload, X } from 'lucide-react';
+
+// Types
+interface Message {
+  id: string;
+  content: string;
+  sender: 'user' | 'ai';
+  timestamp: string;
+  files?: File[];
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 export default function ChatPage() {
-  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
+  const [isListening, setIsListening] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [userId] = useState(() => `user-${Date.now()}`);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // n8n webhook URL - Replace with your actual webhook URL
+  const WEBHOOK_URL = 'https://sameeksha.app.n8n.cloud/webhook/chat';
 
   useEffect(() => {
     // Initialize with a default session
@@ -20,7 +43,7 @@ export default function ChatPage() {
       messages: [
         {
           id: '1',
-          content: 'Hello! I\'m your AI assistant powered by advanced RAG technology. I can help you analyze and answer questions about your uploaded documents. Upload some files in the Documents section and then ask me anything about them!',
+          content: 'Hello! I\'m your AI assistant powered by advanced RAG technology. I can help you analyze and answer questions about your uploaded documents, manage your calendar, send emails, and much more!',
           sender: 'ai',
           timestamp: new Date().toISOString()
         }
@@ -38,8 +61,58 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
+  // Initialize speech recognition
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInputValue(transcript);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+    }
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const toggleVoiceRecognition = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      recognitionRef.current.start();
+      setIsListening(true);
+    }
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    setUploadedFiles(prev => [...prev, ...files]);
+  };
+
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -50,41 +123,120 @@ export default function ChatPage() {
       id: Date.now().toString(),
       content: inputValue,
       sender: 'user',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      files: uploadedFiles.length > 0 ? [...uploadedFiles] : undefined
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
+    setUploadedFiles([]);
     setIsTyping(true);
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      // FIXED: Prepare the request payload with both sessionId and chatId for compatibility
+      const payload = {
+        text: inputValue,           // For AI processing
+        message: inputValue,        // Alternative field name
+        chatId: currentSessionId,   // For Telegram compatibility
+        sessionId: currentSessionId, // For session management
+        userId: userId,
+        timestamp: new Date().toISOString(),
+        files: uploadedFiles.length > 0 ? uploadedFiles.map(f => ({
+          name: f.name,
+          type: f.type,
+          size: f.size
+        })) : undefined
+      };
+
+      console.log('Sending payload:', payload); // Debug log
+
+      // Send to n8n webhook
+      const response = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+
+      console.log('Response status:', response.status);
+      console.log('Response headers:', response.headers);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+      }
+
+      // Check if response has content
+      const responseText = await response.text();
+      console.log('Raw response text:', responseText);
+      
+      let result;
+      if (responseText.trim() === '') {
+        console.warn('Empty response from webhook');
+        result = { output: 'I received your message successfully, but got an empty response from the server.' };
+      } else {
+        try {
+          result = JSON.parse(responseText);
+          console.log('Parsed response from n8n:', result);
+        } catch (parseError) {
+          console.error('JSON parse error:', parseError);
+          console.error('Response text that failed to parse:', responseText);
+          result = { output: `${responseText}` };
+        }
+      }
+      
+      // FIXED: Extract AI response with better error handling
+      let aiResponse = 'I received your message but encountered an issue processing it.';
+      
+      if (result) {
+        // Try different possible response structures
+        aiResponse = result.output || 
+                    result.response || 
+                    result.message || 
+                    result.text ||
+                    result.data?.output ||
+                    result.data?.response ||
+                    aiResponse;
+      }
+
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: generateAIResponse(inputValue),
+        content: aiResponse,
         sender: 'ai',
         timestamp: new Date().toISOString()
       };
       
       setMessages(prev => [...prev, aiMessage]);
-      setIsTyping(false);
-    }, 2000);
-  };
+      
+      // Update session
+      const updatedSession = sessions.find(s => s.id === currentSessionId);
+      if (updatedSession) {
+        updatedSession.messages = [...updatedSession.messages, userMessage, aiMessage];
+        updatedSession.updatedAt = new Date().toISOString();
+        setSessions(prev => prev.map(s => s.id === currentSessionId ? updatedSession : s));
+      }
 
-  const generateAIResponse = (userInput: string): string => {
-    const responses = [
-      "I've analyzed your question against the uploaded documents. Based on the content I found, here's what I can tell you...",
-      "Great question! Let me search through your RAG knowledge base for the most relevant information.",
-      "I understand what you're looking for. The documents you've uploaded contain several insights about this topic.",
-      "That's an excellent inquiry! I've processed your documents and found some relevant information that should help.",
-      "Based on my analysis of your uploaded files, I can provide you with a comprehensive answer to your question."
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
+    } catch (error) {
+      console.error('Error sending message:', error);
+      
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}. Please check your webhook URL and try again.`,
+        sender: 'ai',
+        timestamp: new Date().toISOString()
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const createNewSession = () => {
     const newSession: ChatSession = {
-      id: Date.now().toString(),
+      id: `session-${Date.now()}`, // More descriptive ID
       title: 'New Conversation',
       messages: [{
         id: Date.now().toString(),
@@ -110,7 +262,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       {/* Chat Sessions Sidebar */}
       <div className="w-80 bg-white/10 backdrop-blur-xl border-r border-white/20 flex flex-col">
         <div className="p-6 border-b border-white/20">
@@ -143,6 +295,9 @@ export default function ChatPage() {
                   <p className="text-xs text-white/60 mt-1">
                     {session.messages.length} messages
                   </p>
+                  <p className="text-xs text-white/40 mt-1">
+                    ID: {session.id}
+                  </p>
                 </div>
               </div>
             </button>
@@ -161,6 +316,7 @@ export default function ChatPage() {
             <div className="text-center">
               <h2 className="text-xl font-bold text-white">AI Assistant</h2>
               <p className="text-sm text-white/70">Powered by RAG Technology</p>
+              <p className="text-xs text-white/50">Session: {currentSessionId}</p>
             </div>
           </div>
         </div>
@@ -187,6 +343,15 @@ export default function ChatPage() {
                     : 'bg-white/20 backdrop-blur-xl border border-white/30 text-white'
                 }`}>
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                  {message.files && message.files.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {message.files.map((file, index) => (
+                        <div key={index} className="bg-white/20 px-2 py-1 rounded text-xs">
+                          📎 {file.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <p className={`text-xs text-white/60 mt-2 ${
                   message.sender === 'user' ? 'text-right' : 'text-left'
@@ -224,31 +389,89 @@ export default function ChatPage() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* File Upload Preview */}
+        {uploadedFiles.length > 0 && (
+          <div className="bg-white/10 backdrop-blur-xl border-t border-white/20 p-4">
+            <div className="flex flex-wrap gap-2">
+              {uploadedFiles.map((file, index) => (
+                <div key={index} className="flex items-center space-x-2 bg-white/20 px-3 py-2 rounded-lg">
+                  <span className="text-sm text-white">📎 {file.name}</span>
+                  <button
+                    onClick={() => removeFile(index)}
+                    className="text-white/70 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Message Input */}
         <div className="bg-white/10 backdrop-blur-xl border-t border-white/20 p-6">
-          <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             <div className="relative">
               <input
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage(e)}
                 placeholder="Ask me anything about your documents..."
-                className="w-full px-6 py-4 pr-14 bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 text-white placeholder-white/60 shadow-lg"
+                className="w-full px-6 py-4 pr-32 bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 text-white placeholder-white/60 shadow-lg"
                 disabled={isTyping}
               />
-              <button
-                type="submit"
-                disabled={!inputValue.trim() || isTyping}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl flex items-center justify-center hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-              >
-                {isTyping ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
-              </button>
+              
+              {/* Controls */}
+              <div className="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center space-x-2">
+                {/* File Upload */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-8 h-8 bg-white/20 text-white rounded-xl flex items-center justify-center hover:bg-white/30 transition-all duration-300"
+                >
+                  <Upload className="w-4 h-4" />
+                </button>
+                
+                {/* Voice Recognition */}
+                <button
+                  type="button"
+                  onClick={toggleVoiceRecognition}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-300 ${
+                    isListening 
+                      ? 'bg-red-500 text-white animate-pulse' 
+                      : 'bg-white/20 text-white hover:bg-white/30'
+                  }`}
+                >
+                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </button>
+                
+                {/* Send Button */}
+                <button
+                  type="button"
+                  onClick={handleSendMessage}
+                  disabled={!inputValue.trim() || isTyping}
+                  className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl flex items-center justify-center hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                >
+                  {isTyping ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              
+              {/* Hidden File Input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleFileUpload}
+                className="hidden"
+                accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls"
+              />
             </div>
-          </form>
+          </div>
         </div>
       </div>
     </div>
