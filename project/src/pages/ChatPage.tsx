@@ -33,7 +33,7 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // n8n webhook URL - Replace with your actual webhook URL
-  const WEBHOOK_URL = 'Webhook URL here';
+  const WEBHOOK_URL = 'https://db02-2405-201-c00c-2038-984c-f141-fd-f6ee.ngrok-free.app';
 
   useEffect(() => {
     // Initialize with a default session
