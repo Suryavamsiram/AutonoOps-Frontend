@@ -33,4 +33,4 @@ export interface ChatSession {
   updatedAt: string;
 }
 
-export type Page = 'login' | 'signup' | 'chat' | 'dashboard' | 'admin';
+export type Page = 'login' | 'signup' | 'chat' | 'dashboard' | 'admin'| 'journal';;

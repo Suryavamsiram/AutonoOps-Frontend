@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, FileText, Settings, LogOut, User, Upload } from 'lucide-react';
+import { MessageSquare, FileText, Settings, LogOut, User, Upload, BookHeart } from 'lucide-react';
 import { Page } from '../types';
 import { useAuth } from '../hooks/useAuth';
 
@@ -16,6 +16,7 @@ export default function Navigation({ currentPage, onPageChange }: NavigationProp
   const navItems = [
     { id: 'chat' as Page, label: 'AI Chat', icon: MessageSquare },
     { id: 'dashboard' as Page, label: 'Documents', icon: Upload },
+    { id: 'journal' as Page, label: 'Daily Journal', icon: BookHeart },
     ...(user.role === 'admin' ? [{ id: 'admin' as Page, label: 'Admin', icon: Settings }] : [])
   ];
 

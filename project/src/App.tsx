@@ -6,6 +6,7 @@ import SignupPage from './pages/SignupPage';
 import ChatPage from './pages/ChatPage';
 import Dashboard from './pages/Dashboard';
 import AdminPanel from './pages/AdminPanel';
+import DailyJournalPage from './pages/DailyJournalPage';
 import { Page } from './types';
 
 function AppContent() {
@@ -43,6 +44,7 @@ function AppContent() {
           {currentPage === 'chat' && <ChatPage />}
           {currentPage === 'dashboard' && <Dashboard />}
           {currentPage === 'admin' && <AdminPanel />}
+          {currentPage === 'journal' && <DailyJournalPage />}
         </div>
       </div>
     </div>
